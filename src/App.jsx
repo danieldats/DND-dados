@@ -1,6 +1,26 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { io } from "socket.io-client";
-import { Plus, Trash2, Dices, Award, UserCheck, ShieldAlert, BookOpen, HelpCircle, Code, Play } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Dices,
+  Award,
+  UserCheck,
+  ShieldAlert,
+  BookOpen,
+  HelpCircle,
+  Code,
+  Play,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+  Calculator,
+  Terminal,
+  BookMarked
+} from "lucide-react";
 
 const socket = io();
 
@@ -206,7 +226,7 @@ function parseExpr(tokens, getVar, trace) {
   }
 
   const result = parseOr();
-  if (pos < tokens.length) throw new Error(`Sobra texto cerca de "${tokens[pos].value ?? ""}"`);
+  if (pos < tokens.length) throw new Error(`Sombra texto cerca de "${tokens[pos].value ?? ""}"`);
   return result;
 }
 
@@ -275,7 +295,7 @@ function evaluateFormula(formula, stats, saves, skills, profBonus) {
 }
 
 /* ======================================================================
-   2. DATOS INICIALES D&D 5E
+   2. DATOS INICIALES Y ESTRUCTURA DE ACCIONES / CARPETAS
    ====================================================================== */
 const calcMod = (score) => Math.floor((Number(score) - 10) / 2);
 const calcProf = (level) => Math.floor((Math.max(1, Number(level)) - 1) / 4) + 2;
@@ -319,13 +339,272 @@ const INITIAL_SKILLS = [
   { id: "sk18", name: "Juego de Manos", stat: "DES", profLevel: 0 },
 ];
 
-const INITIAL_ACTIONS = [
-  { id: "a1", name: "Ataque Espada Larga", formula: "1d20 + FUE + COMP" },
-  { id: "a2", name: "Daño Espada A dos Manos", formula: "1d10 + FUE" },
-  { id: "a3", name: "Ataque Furia (Ventaja)", formula: "2d20kh1 + FUE + COMP" },
-  { id: "a4", name: "Ataque Furia de Mandoble", formula: "d = 1d20 + FUE + COMP; dmg = 2d6r1r2 + FUE; d" },
+// Árbol inicial con Carpetas Anidadas
+const INITIAL_ACTION_TREE = [
+  {
+    id: "act_1",
+    type: "action",
+    name: "Ataque Espada Larga",
+    formula: "1d20 + FUE + COMP",
+  },
+  {
+    id: "folder_spells",
+    type: "folder",
+    name: "Hechizos",
+    isOpen: true,
+    children: [
+      {
+        id: "folder_chromatic",
+        type: "folder",
+        name: "Orbe Cromático",
+        isOpen: true,
+        children: [
+          {
+            id: "act_orb1",
+            type: "action",
+            name: "Lanzar a Nivel 1",
+            formula: "3d8",
+          },
+          {
+            id: "act_orb2",
+            type: "action",
+            name: "Lanzar a Nivel 2",
+            formula: "4d8",
+          },
+          {
+            id: "act_orb3",
+            type: "action",
+            name: "Lanzar a Nivel 3",
+            formula: "5d8",
+          },
+        ],
+      },
+      {
+        id: "act_fireball",
+        type: "action",
+        name: "Bola de Fuego (Niv. 3)",
+        formula: "8d6",
+      },
+    ],
+  },
 ];
 
+/* ======================================================================
+   3. GUÍA INTERACTIVA DE SINTAXIS
+   ====================================================================== */
+function SyntaxHelpModal({ onClose }) {
+  const [tab, setTab] = useState("dados");
+
+  return (
+    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 text-xs text-slate-300 space-y-4 shadow-xl">
+      <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+        <h3 className="font-bold text-amber-400 text-sm flex items-center gap-1.5">
+          <BookMarked size={16} /> Guía Práctica de Sintaxis
+        </h3>
+        <button onClick={onClose} className="text-slate-400 hover:text-white text-xs font-bold">✕ Cerrar</button>
+      </div>
+
+      <div className="flex gap-2 border-b border-slate-800 pb-2">
+        <button
+          onClick={() => setTab("dados")}
+          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 ${tab === "dados" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400"}`}
+        >
+          <Dices size={12} /> Dados & Ventaja
+        </button>
+        <button
+          onClick={() => setTab("variables")}
+          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 ${tab === "variables" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400"}`}
+        >
+          <Terminal size={12} /> Variables Ficha
+        </button>
+        <button
+          onClick={() => setTab("funciones")}
+          className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 ${tab === "funciones" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400"}`}
+        >
+          <Calculator size={12} /> Funciones Especiales
+        </button>
+      </div>
+
+      {tab === "dados" && (
+        <div className="space-y-2">
+          <div><code className="text-amber-300">1d20 + 5</code>: Tirada básica de 1 dado de 20 caras sumando 5.</div>
+          <div><code className="text-amber-300">2d20kh1</code>: <b>Ventaja</b> (Tira 2d20 y conserva el valor mayor: <i>keep high 1</i>).</div>
+          <div><code className="text-amber-300">2d20kl1</code>: <b>Desventaja</b> (Tira 2d20 y conserva el menor: <i>keep low 1</i>).</div>
+          <div><code className="text-amber-300">2d6r1r2</code>: <b>Repetir 1s y 2s</b> (Útil para estilo de lucha Mandoble).</div>
+        </div>
+      )}
+
+      {tab === "variables" && (
+        <div className="space-y-2">
+          <div><code className="text-amber-300">FUE, DES, CON, INT, SAB, CAR</code>: Usa directamente el modificador de tus características.</div>
+          <div><code className="text-amber-300">COMP</code>: Usa tu Bonificador de Competencia actual según tu Nivel.</div>
+          <div><code className="text-amber-300">SALV_DES, SALV_CON</code>: Usa el valor total de tus tiradas de salvación.</div>
+          <div><code className="text-amber-300">ATLETISMO, SIGILO, PERCEPCION</code>: Usa el bonus de tus habilidades.</div>
+          <div className="text-slate-400 italic">Ejemplo: <code>1d20 + FUE + COMP</code> calculará tu ataque completo automáticamente.</div>
+        </div>
+      )}
+
+      {tab === "funciones" && (
+        <div className="space-y-2">
+          <div><code className="text-amber-300">max(A, B)</code> / <code className="text-amber-300">min(A, B)</code>: Elige el valor más grande o más pequeño.</div>
+          <div><code className="text-amber-300">floor(X)</code> / <code className="text-amber-300">ceil(X)</code>: Redondea hacia abajo o hacia arriba.</div>
+          <div><code className="text-amber-300">if(condición, valor_si_verdadero, valor_si_falso)</code>: Toma decisiones automáticas.</div>
+          <div className="p-2 bg-slate-900 rounded border border-slate-800">
+            <span className="text-indigo-400 font-bold block">Ejemplo de if():</span>
+            <code className="text-amber-300">if(FUE &gt; 2, 2d6, 1d6)</code> → Si tu modificador de FUE es mayor que +2 tira 2d6; si no, tira 1d6.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ======================================================================
+   4. COMPONENTE RECURSIVO DE ÁRBOL DE ACCIONES / CARPETAS
+   ====================================================================== */
+function ActionTreeNode({ node, onRoll, onDelete, onToggleFolder, onAddSubItem }) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [newItemType, setNewItemType] = useState("action");
+  const [newItemName, setNewItemName] = useState("");
+  const [newItemFormula, setNewItemFormula] = useState("");
+
+  if (node.type === "action") {
+    return (
+      <div className="bg-slate-950 p-2 rounded border border-slate-800 flex justify-between items-center hover:border-slate-700 ml-2 my-1">
+        <div className="space-y-0.5">
+          <div className="font-bold text-xs text-white">{node.name}</div>
+          <div className="text-[10px] text-amber-400 font-mono">{node.formula}</div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onRoll(node.name, node.formula)}
+            className="bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 rounded flex items-center gap-1 text-xs font-bold"
+          >
+            <Play size={10} /> Tirar
+          </button>
+          <button
+            onClick={() => onDelete(node.id)}
+            className="text-slate-600 hover:text-red-400 p-1"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-1">
+      <div className="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 hover:bg-slate-900">
+        <button
+          onClick={() => onToggleFolder(node.id)}
+          className="flex items-center gap-2 font-bold text-xs text-amber-300"
+        >
+          {node.isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {node.isOpen ? <FolderOpen size={14} className="text-amber-400" /> : <Folder size={14} className="text-amber-400" />}
+          <span>{node.name}</span>
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setIsAdding(!isAdding)}
+            className="text-xs bg-slate-800 hover:bg-slate-700 text-indigo-300 p-1 rounded flex items-center gap-0.5"
+            title="Añadir elemento a esta carpeta"
+          >
+            <Plus size={12} />
+          </button>
+          <button
+            onClick={() => onDelete(node.id)}
+            className="text-slate-600 hover:text-red-400 p-1"
+            title="Eliminar carpeta"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* FORMULARIO CREAR DENTRO DE CARPETA */}
+      {isAdding && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!newItemName.trim()) return;
+            onAddSubItem(node.id, {
+              type: newItemType,
+              name: newItemName.trim(),
+              formula: newItemFormula.trim(),
+            });
+            setNewItemName("");
+            setNewItemFormula("");
+            setIsAdding(false);
+          }}
+          className="bg-slate-950 p-2 my-1 rounded border border-indigo-500/50 ml-4 space-y-2"
+        >
+          <div className="flex gap-2 items-center">
+            <select
+              value={newItemType}
+              onChange={(e) => setNewItemType(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-xs rounded p-1"
+            >
+              <option value="action">Acción</option>
+              <option value="folder">Subcarpeta</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Nombre"
+              value={newItemName}
+              onChange={(e) => setNewItemName(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-xs rounded p-1 flex-1 text-white"
+            />
+          </div>
+          {newItemType === "action" && (
+            <input
+              type="text"
+              placeholder="Fórmula (ej. 3d8 + FUE)"
+              value={newItemFormula}
+              onChange={(e) => setNewItemFormula(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-xs rounded p-1 w-full text-amber-300 font-mono"
+            />
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAdding(false)}
+              className="text-xs text-slate-400 hover:text-white"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="bg-indigo-600 hover:bg-indigo-500 text-xs font-bold px-2 py-0.5 rounded"
+            >
+              Guardar
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* HIJOS DE LA CARPETA */}
+      {node.isOpen && node.children && (
+        <div className="pl-3 border-l border-slate-800 space-y-1 my-1">
+          {node.children.map((child) => (
+            <ActionTreeNode
+              key={child.id}
+              node={child}
+              onRoll={onRoll}
+              onDelete={onDelete}
+              onToggleFolder={onToggleFolder}
+              onAddSubItem={onAddSubItem}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ======================================================================
+   5. COMPONENTE PRINCIPAL (APP)
+   ====================================================================== */
 export default function App() {
   const [playerName, setPlayerName] = useState("Jugador");
   const [isDM, setIsDM] = useState(false);
@@ -333,12 +612,12 @@ export default function App() {
   const [stats, setStats] = useState(INITIAL_STATS);
   const [saves, setSaves] = useState(INITIAL_SAVES);
   const [skills, setSkills] = useState(INITIAL_SKILLS);
-  const [actions, setActions] = useState(INITIAL_ACTIONS);
+  const [tree, setTree] = useState(INITIAL_ACTION_TREE);
   const [log, setLog] = useState([]);
 
-  // Formulario nueva acción
-  const [newActionName, setNewActionName] = useState("");
-  const [newActionFormula, setNewActionFormula] = useState("");
+  const [rootItemType, setRootItemType] = useState("action");
+  const [rootItemName, setRootItemName] = useState("");
+  const [rootItemFormula, setRootItemFormula] = useState("");
   const [showHelp, setShowHelp] = useState(false);
 
   const profBonus = calcProf(level);
@@ -371,23 +650,6 @@ export default function App() {
     );
   };
 
-  const addCustomAction = (e) => {
-    e.preventDefault();
-    if (!newActionName.trim() || !newActionFormula.trim()) return;
-
-    setActions([
-      ...actions,
-      { id: `act_${Date.now()}`, name: newActionName.trim(), formula: newActionFormula.trim() },
-    ]);
-
-    setNewActionName("");
-    setNewActionFormula("");
-  };
-
-  const removeAction = (id) => {
-    setActions(actions.filter((a) => a.id !== id));
-  };
-
   const rollDirect = useCallback((name, formula) => {
     try {
       const { total, trace } = evaluateFormula(formula, stats, saves, skills, profBonus);
@@ -403,9 +665,60 @@ export default function App() {
 
       socket.emit("roll_action", entry);
     } catch (e) {
-      alert(`Error en fórmula: ${e.message}`);
+      alert(`Error en la tirada: ${e.message}`);
     }
   }, [stats, saves, skills, profBonus, playerName]);
+
+  // Funciones de gestión del árbol de carpetas
+  const toggleFolderInTree = (nodes, id) => {
+    return nodes.map((n) => {
+      if (n.id === id) return { ...n, isOpen: !n.isOpen };
+      if (n.children) return { ...n, children: toggleFolderInTree(n.children, id) };
+      return n;
+    });
+  };
+
+  const deleteFromTree = (nodes, id) => {
+    return nodes
+      .filter((n) => n.id !== id)
+      .map((n) => (n.children ? { ...n, children: deleteFromTree(n.children, id) } : n));
+  };
+
+  const addToSubFolder = (nodes, targetFolderId, item) => {
+    return nodes.map((n) => {
+      if (n.id === targetFolderId) {
+        const newChild = {
+          id: `node_${Date.now()}_${Math.random()}`,
+          ...item,
+          isOpen: true,
+          children: item.type === "folder" ? [] : undefined,
+        };
+        return { ...n, isOpen: true, children: [...(n.children || []), newChild] };
+      }
+      if (n.children) {
+        return { ...n, children: addToSubFolder(n.children, targetFolderId, item) };
+      }
+      return n;
+    });
+  };
+
+  const handleAddRootItem = (e) => {
+    e.preventDefault();
+    if (!rootItemName.trim()) return;
+
+    const newItem = {
+      id: `node_${Date.now()}`,
+      type: rootItemType,
+      name: rootItemName.trim(),
+      formula: rootItemFormula.trim(),
+      isOpen: true,
+      children: rootItemType === "folder" ? [] : undefined,
+    };
+
+    setTree([...tree, newItem]);
+    setRootItemName("");
+    setRootItemFormula("");
+  };
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6 text-white font-sans">
@@ -541,55 +854,54 @@ export default function App() {
           </div>
         </div>
 
-        {/* COLUMNA 3: ACCIONES PERSONALIZADAS Y CREACIÓN */}
+        {/* COLUMNA 3: ÁRBOL DE ACCIONES / CARPETAS Y REGISTRO */}
         <div className="lg:col-span-6 space-y-4">
           
-          {/* PANEL DE ACCIONES */}
+          {/* PANEL DE ACCIONES CON CARPETAS */}
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-4">
             <div className="flex justify-between items-center border-b border-slate-800 pb-2">
               <h2 className="font-bold text-sm text-slate-300 flex items-center gap-2">
-                <Code size={16} className="text-amber-400" /> Acciones Personalizadas
+                <FolderPlus size={16} className="text-amber-400" /> Acciones y Conjuros Organizados
               </h2>
               <button
                 onClick={() => setShowHelp(!showHelp)}
                 className="text-xs bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold px-2 py-1 rounded flex items-center gap-1"
               >
-                <HelpCircle size={14} /> Sintaxis & Variables
+                <HelpCircle size={14} /> Ayuda Sintaxis
               </button>
             </div>
 
-            {/* GUÍA DE SINTAXIS (DESPLEGABLE) */}
-            {showHelp && (
-              <div className="bg-slate-950 p-3 rounded border border-slate-800 text-xs space-y-2 text-slate-300 font-mono">
-                <div className="font-bold text-amber-400 font-sans border-b border-slate-800 pb-1">
-                  Manual del Motor de Tiradas:
-                </div>
-                <div><span className="text-indigo-400">Dados Básicos:</span> <code className="text-white">1d20</code>, <code className="text-white">2d6</code>, <code className="text-white">1d100</code></div>
-                <div><span className="text-indigo-400">Ventaja/Desventaja:</span> <code className="text-white">2d20kh1</code> (Conserva mayor), <code className="text-white">2d20kl1</code> (Conserva menor)</div>
-                <div><span className="text-indigo-400">Repetir Dados (Estilo Estilista/Mandoble):</span> <code className="text-white">2d6r1r2</code> (Repite 1s y 2s una vez)</div>
-                <div><span className="text-indigo-400">Variables de Atributos:</span> <code className="text-white">FUE</code>, <code className="text-white">DES</code>, <code className="text-white">CON</code>, <code className="text-white">INT</code>, <code className="text-white">SAB</code>, <code className="text-white">CAR</code>, <code className="text-white">COMP</code></div>
-                <div><span className="text-indigo-400">Salvaciones:</span> <code className="text-white">SALV_FUE</code>, <code className="text-white">SALV_DES</code>, etc.</div>
-                <div><span className="text-indigo-400">Habilidades:</span> <code className="text-white">ATLETISMO</code>, <code className="text-white">PERCEPCION</code>, <code className="text-white">SIGILO</code>, etc.</div>
-                <div><span className="text-indigo-400">Asignaciones Multi-Paso:</span> <code className="text-white">d = 1d20 + FUE; dmg = 2d6; d</code> (Devuelve la última variable)</div>
-              </div>
-            )}
+            {/* GUÍA DE SINTAXIS */}
+            {showHelp && <SyntaxHelpModal onClose={() => setShowHelp(false)} />}
 
-            {/* FORMULARIO CREAR ACCIÓN */}
-            <form onSubmit={addCustomAction} className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded border border-slate-800">
+            {/* FORMULARIO PARA AÑADIR A LA RAÍZ */}
+            <form onSubmit={handleAddRootItem} className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded border border-slate-800">
+              <select
+                value={rootItemType}
+                onChange={(e) => setRootItemType(e.target.value)}
+                className="sm:col-span-3 bg-slate-900 border border-slate-700 px-2 py-1 rounded text-xs font-semibold text-indigo-300"
+              >
+                <option value="action">Acción Suelta</option>
+                <option value="folder">Carpeta Raíz</option>
+              </select>
               <input
                 type="text"
-                placeholder="Nombre (ej. Ataque Furia)"
-                value={newActionName}
-                onChange={(e) => setNewActionName(e.target.value)}
+                placeholder={rootItemType === "folder" ? "Nombre Carpeta (ej. Hechizos)" : "Nombre Acción"}
+                value={rootItemName}
+                onChange={(e) => setRootItemName(e.target.value)}
                 className="sm:col-span-4 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-xs text-white"
               />
-              <input
-                type="text"
-                placeholder="Fórmula (ej. 2d20kh1 + FUE + COMP)"
-                value={newActionFormula}
-                onChange={(e) => setNewActionFormula(e.target.value)}
-                className="sm:col-span-6 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-xs font-mono text-amber-300"
-              />
+              {rootItemType === "action" ? (
+                <input
+                  type="text"
+                  placeholder="Fórmula (ej. 1d20 + FUE)"
+                  value={rootItemFormula}
+                  onChange={(e) => setRootItemFormula(e.target.value)}
+                  className="sm:col-span-3 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-xs font-mono text-amber-300"
+                />
+              ) : (
+                <div className="sm:col-span-3"></div>
+              )}
               <button
                 type="submit"
                 className="sm:col-span-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs rounded px-2 py-1 flex items-center justify-center gap-1"
@@ -598,35 +910,23 @@ export default function App() {
               </button>
             </form>
 
-            {/* LISTA DE ACCIONES */}
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-              {actions.map((act) => (
-                <div key={act.id} className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center hover:border-slate-700">
-                  <div className="space-y-0.5">
-                    <div className="font-bold text-xs text-white">{act.name}</div>
-                    <div className="text-[10px] text-amber-400 font-mono">{act.formula}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => rollDirect(act.name, act.formula)}
-                      className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1 rounded flex items-center gap-1 text-xs font-bold"
-                    >
-                      <Play size={12} /> Tirar
-                    </button>
-                    <button
-                      onClick={() => removeAction(act.id)}
-                      className="text-slate-600 hover:text-red-400 p-1"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
+            {/* VISTA EN ÁRBOL DE CARPETAS Y ACCIONES */}
+            <div className="space-y-1 max-h-72 overflow-y-auto pr-1 bg-slate-950/50 p-2 rounded border border-slate-800/80">
+              {tree.map((node) => (
+                <ActionTreeNode
+                  key={node.id}
+                  node={node}
+                  onRoll={rollDirect}
+                  onDelete={(id) => setTree((prev) => deleteFromTree(prev, id))}
+                  onToggleFolder={(id) => setTree((prev) => toggleFolderInTree(prev, id))}
+                  onAddSubItem={(folderId, item) => setTree((prev) => addToSubFolder(prev, folderId, item))}
+                />
               ))}
             </div>
           </div>
 
           {/* HISTORIAL / REGISTRO DE MESA */}
-          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-64 flex flex-col">
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-60 flex flex-col">
             <h2 className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Registro de la Mesa</h2>
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {log.map((entry) => (
