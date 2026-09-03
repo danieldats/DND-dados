@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { io } from "socket.io-client";
-import { Plus, Trash2, Dices, Award, UserCheck, ShieldAlert, BookOpen } from "lucide-react";
+import { Plus, Trash2, Dices, Award, UserCheck, ShieldAlert, BookOpen, HelpCircle, Code, Play } from "lucide-react";
 
 const socket = io();
 
@@ -214,15 +214,12 @@ function evaluateFormula(formula, stats, saves, skills, profBonus) {
   const trace = [];
   const statLookup = {};
 
-  // 1. Atributos base
   stats.forEach((s) => {
     statLookup[s.name.trim().toLowerCase()] = Number(s.mod) || 0;
   });
 
-  // 2. Bonificador de Competencia
   statLookup["comp"] = Number(profBonus) || 0;
 
-  // 3. Tiradas de Salvación
   saves.forEach((sv) => {
     const parentStat = stats.find((s) => s.name === sv.stat);
     const statMod = parentStat ? parentStat.mod : 0;
@@ -230,7 +227,6 @@ function evaluateFormula(formula, stats, saves, skills, profBonus) {
     statLookup[`salv_${sv.stat.toLowerCase()}`] = bonus;
   });
 
-  // 4. Habilidades
   skills.forEach((sk) => {
     const parentStat = stats.find((s) => s.name === sk.stat);
     const statMod = parentStat ? parentStat.mod : 0;
@@ -324,9 +320,10 @@ const INITIAL_SKILLS = [
 ];
 
 const INITIAL_ACTIONS = [
-  { id: "a1", name: "Ataque Espada", formula: "1d20 + FUE + COMP" },
-  { id: "a2", name: "Salvación de CON", formula: "1d20 + SALV_CON" },
-  { id: "a3", name: "Tirada de Sigilo", formula: "1d20 + SIGILO" },
+  { id: "a1", name: "Ataque Espada Larga", formula: "1d20 + FUE + COMP" },
+  { id: "a2", name: "Daño Espada A dos Manos", formula: "1d10 + FUE" },
+  { id: "a3", name: "Ataque Furia (Ventaja)", formula: "2d20kh1 + FUE + COMP" },
+  { id: "a4", name: "Ataque Furia de Mandoble", formula: "d = 1d20 + FUE + COMP; dmg = 2d6r1r2 + FUE; d" },
 ];
 
 export default function App() {
@@ -338,6 +335,11 @@ export default function App() {
   const [skills, setSkills] = useState(INITIAL_SKILLS);
   const [actions, setActions] = useState(INITIAL_ACTIONS);
   const [log, setLog] = useState([]);
+
+  // Formulario nueva acción
+  const [newActionName, setNewActionName] = useState("");
+  const [newActionFormula, setNewActionFormula] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
 
   const profBonus = calcProf(level);
 
@@ -369,6 +371,23 @@ export default function App() {
     );
   };
 
+  const addCustomAction = (e) => {
+    e.preventDefault();
+    if (!newActionName.trim() || !newActionFormula.trim()) return;
+
+    setActions([
+      ...actions,
+      { id: `act_${Date.now()}`, name: newActionName.trim(), formula: newActionFormula.trim() },
+    ]);
+
+    setNewActionName("");
+    setNewActionFormula("");
+  };
+
+  const removeAction = (id) => {
+    setActions(actions.filter((a) => a.id !== id));
+  };
+
   const rollDirect = useCallback((name, formula) => {
     try {
       const { total, trace } = evaluateFormula(formula, stats, saves, skills, profBonus);
@@ -384,12 +403,12 @@ export default function App() {
 
       socket.emit("roll_action", entry);
     } catch (e) {
-      alert(`Error en tirada: ${e.message}`);
+      alert(`Error en fórmula: ${e.message}`);
     }
   }, [stats, saves, skills, profBonus, playerName]);
 
   return (
-    <div className="p-4 max-w-6xl mx-auto space-y-6 text-white font-sans">
+    <div className="p-4 max-w-7xl mx-auto space-y-6 text-white font-sans">
       {/* CABECERA */}
       <header className="flex justify-between items-center bg-slate-900 p-4 rounded-lg border border-slate-800 shadow-md">
         <h1 className="text-xl font-bold flex items-center gap-2 text-indigo-400">
@@ -414,7 +433,7 @@ export default function App() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* COLUMNA 1: ATRIBUTOS Y SALVACIONES */}
-        <div className="lg:col-span-4 space-y-4">
+        <div className="lg:col-span-3 space-y-4">
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-4">
             
             {/* NIVEL */}
@@ -488,9 +507,9 @@ export default function App() {
         </div>
 
         {/* COLUMNA 2: HABILIDADES */}
-        <div className="lg:col-span-4 bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
+        <div className="lg:col-span-3 bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-            <BookOpen size={14} className="text-indigo-400" /> Habilidades (D&D 5e)
+            <BookOpen size={14} className="text-indigo-400" /> Habilidades
           </h3>
           <div className="space-y-1 max-h-[500px] overflow-y-auto pr-1">
             {skills.map((sk) => {
@@ -522,30 +541,92 @@ export default function App() {
           </div>
         </div>
 
-        {/* COLUMNA 3: ACCIONES Y REGISTRO */}
-        <div className="lg:col-span-4 space-y-4">
+        {/* COLUMNA 3: ACCIONES PERSONALIZADAS Y CREACIÓN */}
+        <div className="lg:col-span-6 space-y-4">
           
-          {/* ACCIONES */}
-          <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
-            <h2 className="font-semibold text-xs text-slate-400 uppercase tracking-wider">Acciones Rápidas</h2>
-            {actions.map((act) => (
-              <div key={act.id} className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
-                <div>
-                  <div className="font-bold text-xs">{act.name}</div>
-                  <div className="text-[10px] text-slate-500 font-mono">{act.formula}</div>
+          {/* PANEL DE ACCIONES */}
+          <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+              <h2 className="font-bold text-sm text-slate-300 flex items-center gap-2">
+                <Code size={16} className="text-amber-400" /> Acciones Personalizadas
+              </h2>
+              <button
+                onClick={() => setShowHelp(!showHelp)}
+                className="text-xs bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold px-2 py-1 rounded flex items-center gap-1"
+              >
+                <HelpCircle size={14} /> Sintaxis & Variables
+              </button>
+            </div>
+
+            {/* GUÍA DE SINTAXIS (DESPLEGABLE) */}
+            {showHelp && (
+              <div className="bg-slate-950 p-3 rounded border border-slate-800 text-xs space-y-2 text-slate-300 font-mono">
+                <div className="font-bold text-amber-400 font-sans border-b border-slate-800 pb-1">
+                  Manual del Motor de Tiradas:
                 </div>
-                <button
-                  onClick={() => rollDirect(act.name, act.formula)}
-                  className="bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 rounded flex items-center gap-1 text-xs font-bold"
-                >
-                  <Dices size={12} /> Tirar
-                </button>
+                <div><span className="text-indigo-400">Dados Básicos:</span> <code className="text-white">1d20</code>, <code className="text-white">2d6</code>, <code className="text-white">1d100</code></div>
+                <div><span className="text-indigo-400">Ventaja/Desventaja:</span> <code className="text-white">2d20kh1</code> (Conserva mayor), <code className="text-white">2d20kl1</code> (Conserva menor)</div>
+                <div><span className="text-indigo-400">Repetir Dados (Estilo Estilista/Mandoble):</span> <code className="text-white">2d6r1r2</code> (Repite 1s y 2s una vez)</div>
+                <div><span className="text-indigo-400">Variables de Atributos:</span> <code className="text-white">FUE</code>, <code className="text-white">DES</code>, <code className="text-white">CON</code>, <code className="text-white">INT</code>, <code className="text-white">SAB</code>, <code className="text-white">CAR</code>, <code className="text-white">COMP</code></div>
+                <div><span className="text-indigo-400">Salvaciones:</span> <code className="text-white">SALV_FUE</code>, <code className="text-white">SALV_DES</code>, etc.</div>
+                <div><span className="text-indigo-400">Habilidades:</span> <code className="text-white">ATLETISMO</code>, <code className="text-white">PERCEPCION</code>, <code className="text-white">SIGILO</code>, etc.</div>
+                <div><span className="text-indigo-400">Asignaciones Multi-Paso:</span> <code className="text-white">d = 1d20 + FUE; dmg = 2d6; d</code> (Devuelve la última variable)</div>
               </div>
-            ))}
+            )}
+
+            {/* FORMULARIO CREAR ACCIÓN */}
+            <form onSubmit={addCustomAction} className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded border border-slate-800">
+              <input
+                type="text"
+                placeholder="Nombre (ej. Ataque Furia)"
+                value={newActionName}
+                onChange={(e) => setNewActionName(e.target.value)}
+                className="sm:col-span-4 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-xs text-white"
+              />
+              <input
+                type="text"
+                placeholder="Fórmula (ej. 2d20kh1 + FUE + COMP)"
+                value={newActionFormula}
+                onChange={(e) => setNewActionFormula(e.target.value)}
+                className="sm:col-span-6 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded text-xs font-mono text-amber-300"
+              />
+              <button
+                type="submit"
+                className="sm:col-span-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs rounded px-2 py-1 flex items-center justify-center gap-1"
+              >
+                <Plus size={14} /> Crear
+              </button>
+            </form>
+
+            {/* LISTA DE ACCIONES */}
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {actions.map((act) => (
+                <div key={act.id} className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center hover:border-slate-700">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-xs text-white">{act.name}</div>
+                    <div className="text-[10px] text-amber-400 font-mono">{act.formula}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => rollDirect(act.name, act.formula)}
+                      className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1 rounded flex items-center gap-1 text-xs font-bold"
+                    >
+                      <Play size={12} /> Tirar
+                    </button>
+                    <button
+                      onClick={() => removeAction(act.id)}
+                      className="text-slate-600 hover:text-red-400 p-1"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* HISTORIAL */}
-          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-80 flex flex-col">
+          {/* HISTORIAL / REGISTRO DE MESA */}
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-64 flex flex-col">
             <h2 className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Registro de la Mesa</h2>
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {log.map((entry) => (
