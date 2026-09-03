@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { io } from "socket.io-client";
-import { Plus, Trash2, Dices, Award, UserCheck } from "lucide-react";
+import { Plus, Trash2, Dices, Award, UserCheck, ShieldAlert, BookOpen } from "lucide-react";
 
 const socket = io();
 
@@ -210,16 +210,27 @@ function parseExpr(tokens, getVar, trace) {
   return result;
 }
 
-function evaluateFormula(formula, stats, skills, profBonus) {
+function evaluateFormula(formula, stats, saves, skills, profBonus) {
   const trace = [];
   const statLookup = {};
 
+  // 1. Atributos base
   stats.forEach((s) => {
     statLookup[s.name.trim().toLowerCase()] = Number(s.mod) || 0;
   });
 
+  // 2. Bonificador de Competencia
   statLookup["comp"] = Number(profBonus) || 0;
 
+  // 3. Tiradas de Salvación
+  saves.forEach((sv) => {
+    const parentStat = stats.find((s) => s.name === sv.stat);
+    const statMod = parentStat ? parentStat.mod : 0;
+    const bonus = statMod + (sv.proficient ? profBonus : 0);
+    statLookup[`salv_${sv.stat.toLowerCase()}`] = bonus;
+  });
+
+  // 4. Habilidades
   skills.forEach((sk) => {
     const parentStat = stats.find((s) => s.name === sk.stat);
     const statMod = parentStat ? parentStat.mod : 0;
@@ -231,7 +242,7 @@ function evaluateFormula(formula, stats, skills, profBonus) {
     const key = name.trim().toLowerCase();
     if (key in locals) return locals[key];
     if (key in statLookup) return statLookup[key];
-    trace.push(`⚠ "${name}" no existe, usó 0`);
+    trace.push(`⚠ "${name}" no existe, se usó 0`);
     return 0;
   };
 
@@ -268,7 +279,7 @@ function evaluateFormula(formula, stats, skills, profBonus) {
 }
 
 /* ======================================================================
-   2. DATOS INICIALES Y COMPONENTE PRINCIPAL
+   2. DATOS INICIALES D&D 5E
    ====================================================================== */
 const calcMod = (score) => Math.floor((Number(score) - 10) / 2);
 const calcProf = (level) => Math.floor((Math.max(1, Number(level)) - 1) / 4) + 2;
@@ -282,15 +293,40 @@ const INITIAL_STATS = [
   { id: "s6", name: "CAR", score: 8, mod: -1 },
 ];
 
+const INITIAL_SAVES = [
+  { id: "sv1", stat: "FUE", proficient: true },
+  { id: "sv2", stat: "DES", proficient: false },
+  { id: "sv3", stat: "CON", proficient: true },
+  { id: "sv4", stat: "INT", proficient: false },
+  { id: "sv5", stat: "SAB", proficient: false },
+  { id: "sv6", stat: "CAR", proficient: false },
+];
+
 const INITIAL_SKILLS = [
-  { id: "sk1", name: "Atletismo", stat: "FUE", profLevel: 1 },
-  { id: "sk2", name: "Percepcion", stat: "SAB", profLevel: 1 },
+  { id: "sk1", name: "Acrobacias", stat: "DES", profLevel: 0 },
+  { id: "sk2", name: "Atletismo", stat: "FUE", profLevel: 1 },
+  { id: "sk3", name: "Arcanos", stat: "INT", profLevel: 0 },
+  { id: "sk4", name: "Engaño", stat: "CAR", profLevel: 0 },
+  { id: "sk5", name: "Historia", stat: "INT", profLevel: 0 },
+  { id: "sk6", name: "Interpretacion", stat: "CAR", profLevel: 0 },
+  { id: "sk7", name: "Intimidacion", stat: "CAR", profLevel: 0 },
+  { id: "sk8", name: "Investigacion", stat: "INT", profLevel: 0 },
+  { id: "sk9", name: "Medicina", stat: "SAB", profLevel: 0 },
+  { id: "sk10", name: "Naturaleza", stat: "INT", profLevel: 0 },
+  { id: "sk11", name: "Percepcion", stat: "SAB", profLevel: 1 },
+  { id: "sk12", name: "Perspicacia", stat: "SAB", profLevel: 0 },
+  { id: "sk13", name: "Persuasion", stat: "CAR", profLevel: 0 },
+  { id: "sk14", name: "Religion", stat: "INT", profLevel: 0 },
+  { id: "sk15", name: "Sigilo", stat: "DES", profLevel: 2 },
+  { id: "sk16", name: "Supervivencia", stat: "SAB", profLevel: 0 },
+  { id: "sk17", name: "Trato con Animales", stat: "SAB", profLevel: 0 },
+  { id: "sk18", name: "Juego de Manos", stat: "DES", profLevel: 0 },
 ];
 
 const INITIAL_ACTIONS = [
-  { id: "a1", name: "Ataque con Espada", formula: "1d20 + FUE + COMP" },
-  { id: "a2", name: "Prueba de Atletismo", formula: "1d20 + ATLETISMO" },
-  { id: "a3", name: "Daño de Espada", formula: "1d8 + FUE" },
+  { id: "a1", name: "Ataque Espada", formula: "1d20 + FUE + COMP" },
+  { id: "a2", name: "Salvación de CON", formula: "1d20 + SALV_CON" },
+  { id: "a3", name: "Tirada de Sigilo", formula: "1d20 + SIGILO" },
 ];
 
 export default function App() {
@@ -298,6 +334,7 @@ export default function App() {
   const [isDM, setIsDM] = useState(false);
   const [level, setLevel] = useState(5);
   const [stats, setStats] = useState(INITIAL_STATS);
+  const [saves, setSaves] = useState(INITIAL_SAVES);
   const [skills, setSkills] = useState(INITIAL_SKILLS);
   const [actions, setActions] = useState(INITIAL_ACTIONS);
   const [log, setLog] = useState([]);
@@ -320,20 +357,26 @@ export default function App() {
     );
   };
 
+  const toggleSaveProf = (id) => {
+    setSaves((prev) =>
+      prev.map((sv) => (sv.id === id ? { ...sv, proficient: !sv.proficient } : sv))
+    );
+  };
+
   const toggleSkillProf = (id) => {
     setSkills((prev) =>
       prev.map((sk) => (sk.id === id ? { ...sk, profLevel: (sk.profLevel + 1) % 3 } : sk))
     );
   };
 
-  const roll = useCallback((action) => {
+  const rollDirect = useCallback((name, formula) => {
     try {
-      const { total, trace } = evaluateFormula(action.formula, stats, skills, profBonus);
+      const { total, trace } = evaluateFormula(formula, stats, saves, skills, profBonus);
 
       const entry = {
         id: `log_${Date.now()}`,
         player: playerName,
-        actionName: action.name,
+        actionName: name,
         total,
         trace,
         ts: Date.now()
@@ -341,21 +384,21 @@ export default function App() {
 
       socket.emit("roll_action", entry);
     } catch (e) {
-      alert(`Error en fórmula: ${e.message}`);
+      alert(`Error en tirada: ${e.message}`);
     }
-  }, [stats, skills, profBonus, playerName]);
+  }, [stats, saves, skills, profBonus, playerName]);
 
   return (
-    <div className="p-4 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 max-w-6xl mx-auto space-y-6 text-white font-sans">
       {/* CABECERA */}
-      <header className="flex justify-between items-center bg-slate-900 p-4 rounded-lg border border-slate-800">
+      <header className="flex justify-between items-center bg-slate-900 p-4 rounded-lg border border-slate-800 shadow-md">
         <h1 className="text-xl font-bold flex items-center gap-2 text-indigo-400">
-          <Dices /> VTT Dice Roller
+          <Dices /> VTT Dice Roller - D&D 5e
         </h1>
         <div className="flex gap-4 items-center">
           <input
             type="text"
-            className="bg-slate-950 px-3 py-1 rounded border border-slate-700 text-sm font-semibold"
+            className="bg-slate-950 px-3 py-1 rounded border border-slate-700 text-sm font-semibold text-amber-300"
             value={playerName}
             onChange={(e) => setPlayerName(e.target.value)}
           />
@@ -368,10 +411,13 @@ export default function App() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* COLUMNA IZQUIERDA: CARACTERÍSTICAS Y COMPETENCIAS */}
-        <div className="space-y-6 lg:col-span-1">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* COLUMNA 1: ATRIBUTOS Y SALVACIONES */}
+        <div className="lg:col-span-4 space-y-4">
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-4">
+            
+            {/* NIVEL */}
             <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded border border-slate-800">
               <div className="flex items-center gap-2">
                 <Award className="text-amber-400" size={20} />
@@ -386,12 +432,12 @@ export default function App() {
                 />
               </div>
               <div className="text-right">
-                <span className="text-xs text-slate-400 block">COMPETENCIA</span>
+                <span className="text-xs text-slate-400 block font-semibold">COMPETENCIA</span>
                 <span className="text-amber-400 font-extrabold">+{profBonus}</span>
               </div>
             </div>
 
-            {/* ATRIBUTOS BASE */}
+            {/* ATRIBUTOS */}
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Características</h3>
             <div className="grid grid-cols-3 gap-2">
               {stats.map((s) => (
@@ -408,85 +454,115 @@ export default function App() {
               ))}
             </div>
 
-            {/* COMPETENCIAS */}
-            <div className="flex justify-between items-center pt-2 border-t border-slate-800">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Competencias</h3>
-              <button
-                onClick={() => setSkills([...skills, { id: `sk_${Date.now()}`, name: "Nueva", stat: "FUE", profLevel: 1 }])}
-                className="text-xs bg-slate-800 hover:bg-slate-700 p-1 rounded"
-              >
-                <Plus size={14} />
-              </button>
+            {/* SALVACIONES */}
+            <div className="pt-2 border-t border-slate-800">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1">
+                <ShieldAlert size={14} className="text-red-400" /> Tiradas de Salvación
+              </h3>
+              <div className="grid grid-cols-2 gap-2">
+                {saves.map((sv) => {
+                  const parentStat = stats.find((s) => s.name === sv.stat);
+                  const total = (parentStat ? parentStat.mod : 0) + (sv.proficient ? profBonus : 0);
+                  return (
+                    <div key={sv.id} className="flex justify-between items-center bg-slate-950 p-2 rounded text-xs border border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleSaveProf(sv.id)}
+                          className={`w-3.5 h-3.5 rounded-full border ${sv.proficient ? "bg-amber-500 border-amber-400" : "border-slate-700"}`}
+                        />
+                        <span className="font-bold">{sv.stat}</span>
+                      </div>
+                      <button
+                        onClick={() => rollDirect(`Salvación ${sv.stat}`, `1d20 + SALV_${sv.stat}`)}
+                        className="font-bold text-amber-300 hover:text-white px-1.5 py-0.5 bg-slate-900 rounded"
+                      >
+                        {total >= 0 ? `+${total}` : total}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {skills.map((sk) => {
-                const parentStat = stats.find((s) => s.name === sk.stat);
-                const total = (parentStat ? parentStat.mod : 0) + sk.profLevel * profBonus;
-                return (
-                  <div key={sk.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded text-xs border border-slate-800">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleSkillProf(sk.id)}
-                        className={`w-4 h-4 rounded-full text-[9px] font-bold border ${
-                          sk.profLevel === 2 ? "bg-amber-500 text-black" : sk.profLevel === 1 ? "bg-indigo-600 text-white" : "border-slate-700"
-                        }`}
-                      >
-                        {sk.profLevel === 2 ? "x2" : sk.profLevel === 1 ? "✓" : ""}
-                      </button>
-                      <span>{sk.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-amber-300">{total >= 0 ? `+${total}` : total}</span>
-                      <button onClick={() => setSkills(skills.filter((s) => s.id !== sk.id))} className="text-slate-600 hover:text-red-400">
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         </div>
 
-        {/* COLUMNA CENTRAL Y DERECHA: ACCIONES Y LOG */}
-        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* COLUMNA 2: HABILIDADES */}
+        <div className="lg:col-span-4 bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+            <BookOpen size={14} className="text-indigo-400" /> Habilidades (D&D 5e)
+          </h3>
+          <div className="space-y-1 max-h-[500px] overflow-y-auto pr-1">
+            {skills.map((sk) => {
+              const parentStat = stats.find((s) => s.name === sk.stat);
+              const total = (parentStat ? parentStat.mod : 0) + sk.profLevel * profBonus;
+              return (
+                <div key={sk.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded text-xs border border-slate-800 hover:border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleSkillProf(sk.id)}
+                      className={`w-4 h-4 rounded-full text-[9px] font-bold border flex items-center justify-center ${
+                        sk.profLevel === 2 ? "bg-amber-500 text-black border-amber-300" : sk.profLevel === 1 ? "bg-indigo-600 text-white border-indigo-400" : "border-slate-700 text-transparent"
+                      }`}
+                    >
+                      {sk.profLevel === 2 ? "x2" : "✓"}
+                    </button>
+                    <span className="font-medium">{sk.name}</span>
+                    <span className="text-[10px] text-slate-500">({sk.stat})</span>
+                  </div>
+                  <button
+                    onClick={() => rollDirect(sk.name, `1d20 + ${sk.name.replace(/\s+/g, '')}`)}
+                    className="font-bold text-indigo-300 hover:text-white bg-slate-900 px-2 py-0.5 rounded border border-slate-800"
+                  >
+                    {total >= 0 ? `+${total}` : total}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* COLUMNA 3: ACCIONES Y REGISTRO */}
+        <div className="lg:col-span-4 space-y-4">
+          
           {/* ACCIONES */}
           <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
-            <h2 className="font-semibold text-sm border-b border-slate-800 pb-2">Acciones y Ataques</h2>
+            <h2 className="font-semibold text-xs text-slate-400 uppercase tracking-wider">Acciones Rápidas</h2>
             {actions.map((act) => (
-              <div key={act.id} className="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+              <div key={act.id} className="bg-slate-950 p-2.5 rounded border border-slate-800 flex justify-between items-center">
                 <div>
-                  <div className="font-bold text-sm">{act.name}</div>
-                  <div className="text-xs text-slate-500 font-mono">{act.formula}</div>
+                  <div className="font-bold text-xs">{act.name}</div>
+                  <div className="text-[10px] text-slate-500 font-mono">{act.formula}</div>
                 </div>
                 <button
-                  onClick={() => roll(act)}
-                  className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded flex items-center gap-1 text-xs font-bold"
+                  onClick={() => rollDirect(act.name, act.formula)}
+                  className="bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 rounded flex items-center gap-1 text-xs font-bold"
                 >
-                  <Dices size={14} /> Tirar
+                  <Dices size={12} /> Tirar
                 </button>
               </div>
             ))}
           </div>
 
-          {/* HISTORIAL / MESA */}
-          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-96 flex flex-col">
+          {/* HISTORIAL */}
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-80 flex flex-col">
             <h2 className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Registro de la Mesa</h2>
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {log.map((entry) => (
                 <div key={entry.id} className="bg-slate-900 p-2 rounded text-xs border-l-2 border-indigo-500">
-                  <div className="flex justify-between text-slate-500 text-[10px] mb-1">
+                  <div className="flex justify-between text-slate-500 text-[10px] mb-0.5">
                     <span className="font-bold text-indigo-300">{entry.player}</span>
                     <span>{new Date(entry.ts).toLocaleTimeString()}</span>
                   </div>
                   <div className="font-semibold text-xs">{entry.actionName}: <span className="text-amber-400 text-sm font-bold">{entry.total}</span></div>
-                  <div className="text-slate-500 font-mono text-[10px] mt-0.5">{entry.trace?.join(" | ")}</div>
+                  <div className="text-slate-500 font-mono text-[9px] mt-0.5">{entry.trace?.join(" | ")}</div>
                 </div>
               ))}
             </div>
           </div>
+
         </div>
+
       </div>
     </div>
   );
