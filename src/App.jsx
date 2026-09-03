@@ -1,12 +1,11 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { io } from "socket.io-client";
-import { Plus, Trash2, Dices, Info, X, Lock, RefreshCw, UserCheck } from "lucide-react";
+import { Plus, Trash2, Dices, Award, UserCheck } from "lucide-react";
 
-// Conexión dinámica (al mismo host en producción)
 const socket = io();
 
 /* ======================================================================
-   MOTOR DE FÓRMULAS Y SINTAXIS (SIN CAMBIOS)
+   1. MOTOR DE FÓRMULAS Y EVALUADOR
    ====================================================================== */
 function tokenize(input) {
   const tokens = [];
@@ -82,10 +81,10 @@ function rollDice(count, sides, modsStr, trace) {
   let note = "";
   if (keepHigh !== null) {
     kept = [...rolls].sort((a, b) => b.value - a.value).slice(0, keepHigh);
-    note = ` → se queda con ${kept.map((r) => r.value).join(", ")}`;
+    note = ` → conserva [${kept.map((r) => r.value).join(", ")}]`;
   } else if (keepLow !== null) {
     kept = [...rolls].sort((a, b) => a.value - b.value).slice(0, keepLow);
-    note = ` → se queda con ${kept.map((r) => r.value).join(", ")}`;
+    note = ` → conserva [${kept.map((r) => r.value).join(", ")}]`;
   }
   const total = kept.reduce((s, r) => s + r.value, 0);
   const rollsText = rolls
@@ -117,7 +116,7 @@ function parseExpr(tokens, getVar, trace) {
     if (t.type === "op" && t.value === "(") {
       next();
       const v = parseOr();
-      if (!peek() || peek().value !== ")") throw new Error("Falta un paréntesis de cierre");
+      if (!peek() || peek().value !== ")") throw new Error("Falta paréntesis de cierre");
       next();
       return v;
     }
@@ -211,18 +210,28 @@ function parseExpr(tokens, getVar, trace) {
   return result;
 }
 
-function evaluateFormula(formula, stats, flags) {
+function evaluateFormula(formula, stats, skills, profBonus) {
   const trace = [];
   const statLookup = {};
-  stats.forEach((s) => { statLookup[s.name.trim().toLowerCase()] = Number(s.value) || 0; });
-  flags.forEach((f) => { statLookup[f.name.trim().toLowerCase()] = f.value ? 1 : 0; });
-  const locals = {};
 
+  stats.forEach((s) => {
+    statLookup[s.name.trim().toLowerCase()] = Number(s.mod) || 0;
+  });
+
+  statLookup["comp"] = Number(profBonus) || 0;
+
+  skills.forEach((sk) => {
+    const parentStat = stats.find((s) => s.name === sk.stat);
+    const statMod = parentStat ? parentStat.mod : 0;
+    statLookup[sk.name.trim().toLowerCase()] = statMod + sk.profLevel * profBonus;
+  });
+
+  const locals = {};
   const getVar = (name) => {
     const key = name.trim().toLowerCase();
     if (key in locals) return locals[key];
     if (key in statLookup) return statLookup[key];
-    trace.push(`⚠ Variable "${name}" no existe, usando 0`);
+    trace.push(`⚠ "${name}" no existe, usó 0`);
     return 0;
   };
 
@@ -259,36 +268,45 @@ function evaluateFormula(formula, stats, flags) {
 }
 
 /* ======================================================================
-   APLICACIÓN PRINCIPAL REACT CON MULTIJUGADOR SINCRO
+   2. DATOS INICIALES Y COMPONENTE PRINCIPAL
    ====================================================================== */
-const DEFAULT_STATS = [
-  { id: "s1", name: "FUE", value: 3 },
-  { id: "s2", name: "DES", value: 2 },
-  { id: "s3", name: "COMP", value: 3 }
+const calcMod = (score) => Math.floor((Number(score) - 10) / 2);
+const calcProf = (level) => Math.floor((Math.max(1, Number(level)) - 1) / 4) + 2;
+
+const INITIAL_STATS = [
+  { id: "s1", name: "FUE", score: 16, mod: 3 },
+  { id: "s2", name: "DES", score: 14, mod: 2 },
+  { id: "s3", name: "CON", score: 14, mod: 2 },
+  { id: "s4", name: "INT", score: 10, mod: 0 },
+  { id: "s5", name: "SAB", score: 12, mod: 1 },
+  { id: "s6", name: "CAR", score: 8, mod: -1 },
 ];
-const DEFAULT_ACTIONS = [
-  { id: "a1", name: "Ataque Espada", formula: "1d20 + FUE + COMP", private: false },
-  { id: "a2", name: "Daño Espada", formula: "1d8 + FUE", private: false }
+
+const INITIAL_SKILLS = [
+  { id: "sk1", name: "Atletismo", stat: "FUE", profLevel: 1 },
+  { id: "sk2", name: "Percepcion", stat: "SAB", profLevel: 1 },
+];
+
+const INITIAL_ACTIONS = [
+  { id: "a1", name: "Ataque con Espada", formula: "1d20 + FUE + COMP" },
+  { id: "a2", name: "Prueba de Atletismo", formula: "1d20 + ATLETISMO" },
+  { id: "a3", name: "Daño de Espada", formula: "1d8 + FUE" },
 ];
 
 export default function App() {
   const [playerName, setPlayerName] = useState("Jugador");
   const [isDM, setIsDM] = useState(false);
-  const [stats, setStats] = useState(DEFAULT_STATS);
-  const [flags, setFlags] = useState([]);
-  const [actions, setActions] = useState(DEFAULT_ACTIONS);
+  const [level, setLevel] = useState(5);
+  const [stats, setStats] = useState(INITIAL_STATS);
+  const [skills, setSkills] = useState(INITIAL_SKILLS);
+  const [actions, setActions] = useState(INITIAL_ACTIONS);
   const [log, setLog] = useState([]);
-  const [results, setResults] = useState({});
+
+  const profBonus = calcProf(level);
 
   useEffect(() => {
-    // Sincronización socket.io
-    socket.on("init_state", (data) => {
-      if (data.log) setLog(data.log);
-    });
-
-    socket.on("log_updated", (newLog) => {
-      setLog(newLog);
-    });
+    socket.on("init_state", (data) => { if (data.log) setLog(data.log); });
+    socket.on("log_updated", (newLog) => setLog(newLog));
 
     return () => {
       socket.off("init_state");
@@ -296,10 +314,21 @@ export default function App() {
     };
   }, []);
 
+  const updateStatScore = (id, newScore) => {
+    setStats((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, score: newScore, mod: calcMod(newScore) } : s))
+    );
+  };
+
+  const toggleSkillProf = (id) => {
+    setSkills((prev) =>
+      prev.map((sk) => (sk.id === id ? { ...sk, profLevel: (sk.profLevel + 1) % 3 } : sk))
+    );
+  };
+
   const roll = useCallback((action) => {
     try {
-      const { total, trace } = evaluateFormula(action.formula, stats, flags);
-      setResults((prev) => ({ ...prev, [action.id]: { total, trace } }));
+      const { total, trace } = evaluateFormula(action.formula, stats, skills, profBonus);
 
       const entry = {
         id: `log_${Date.now()}`,
@@ -307,76 +336,155 @@ export default function App() {
         actionName: action.name,
         total,
         trace,
-        private: !!action.private,
         ts: Date.now()
       };
 
-      // Emitir tirada a todos los miembros de la sala
       socket.emit("roll_action", entry);
     } catch (e) {
       alert(`Error en fórmula: ${e.message}`);
     }
-  }, [stats, flags, playerName]);
+  }, [stats, skills, profBonus, playerName]);
 
   return (
-    <div className="p-4 max-w-4xl mx-auto bg-slate-900 text-white rounded-lg shadow-xl font-sans">
-      <header className="flex justify-between items-center border-b border-slate-700 pb-4 mb-4">
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Dices className="text-indigo-400" /> VTT Tabletop Roller
+    <div className="p-4 max-w-5xl mx-auto space-y-6">
+      {/* CABECERA */}
+      <header className="flex justify-between items-center bg-slate-900 p-4 rounded-lg border border-slate-800">
+        <h1 className="text-xl font-bold flex items-center gap-2 text-indigo-400">
+          <Dices /> VTT Dice Roller
         </h1>
         <div className="flex gap-4 items-center">
           <input
             type="text"
-            className="bg-slate-800 px-2 py-1 rounded border border-slate-600 text-sm"
+            className="bg-slate-950 px-3 py-1 rounded border border-slate-700 text-sm font-semibold"
             value={playerName}
             onChange={(e) => setPlayerName(e.target.value)}
           />
           <button
             onClick={() => setIsDM(!isDM)}
-            className={`px-3 py-1 rounded text-xs flex items-center gap-1 ${isDM ? 'bg-amber-600' : 'bg-slate-700'}`}
+            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1 ${isDM ? 'bg-amber-600' : 'bg-slate-800'}`}
           >
-            <UserCheck size={14} /> {isDM ? "Modo DM" : "Jugador"}
+            <UserCheck size={14} /> {isDM ? "Modo DJ" : "Jugador"}
           </button>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Acciones */}
-        <div className="space-y-4">
-          <h2 className="font-semibold border-b border-slate-800 pb-1">Acciones</h2>
-          {actions.map((act) => (
-            <div key={act.id} className="bg-slate-800 p-3 rounded flex justify-between items-center">
-              <div>
-                <div className="font-medium text-sm">{act.name}</div>
-                <div className="text-xs text-slate-400">{act.formula}</div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* COLUMNA IZQUIERDA: CARACTERÍSTICAS Y COMPETENCIAS */}
+        <div className="space-y-6 lg:col-span-1">
+          <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-4">
+            <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded border border-slate-800">
+              <div className="flex items-center gap-2">
+                <Award className="text-amber-400" size={20} />
+                <span className="text-xs font-bold">NIVEL</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={level}
+                  onChange={(e) => setLevel(Number(e.target.value))}
+                  className="bg-slate-900 border border-slate-700 w-12 text-center rounded text-sm font-bold"
+                />
               </div>
+              <div className="text-right">
+                <span className="text-xs text-slate-400 block">COMPETENCIA</span>
+                <span className="text-amber-400 font-extrabold">+{profBonus}</span>
+              </div>
+            </div>
+
+            {/* ATRIBUTOS BASE */}
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Características</h3>
+            <div className="grid grid-cols-3 gap-2">
+              {stats.map((s) => (
+                <div key={s.id} className="bg-slate-950 p-2 rounded text-center border border-slate-800">
+                  <div className="text-xs font-bold text-indigo-400">{s.name}</div>
+                  <div className="text-lg font-black my-0.5">{s.mod >= 0 ? `+${s.mod}` : s.mod}</div>
+                  <input
+                    type="number"
+                    value={s.score}
+                    onChange={(e) => updateStatScore(s.id, e.target.value)}
+                    className="bg-slate-900 border border-slate-700 w-10 text-center rounded text-xs"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* COMPETENCIAS */}
+            <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Competencias</h3>
               <button
-                onClick={() => roll(act)}
-                className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded flex items-center gap-1 text-sm font-medium"
+                onClick={() => setSkills([...skills, { id: `sk_${Date.now()}`, name: "Nueva", stat: "FUE", profLevel: 1 }])}
+                className="text-xs bg-slate-800 hover:bg-slate-700 p-1 rounded"
               >
-                <Dices size={16} /> Tirar
+                <Plus size={14} />
               </button>
             </div>
-          ))}
+
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+              {skills.map((sk) => {
+                const parentStat = stats.find((s) => s.name === sk.stat);
+                const total = (parentStat ? parentStat.mod : 0) + sk.profLevel * profBonus;
+                return (
+                  <div key={sk.id} className="flex justify-between items-center bg-slate-950 p-1.5 rounded text-xs border border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleSkillProf(sk.id)}
+                        className={`w-4 h-4 rounded-full text-[9px] font-bold border ${
+                          sk.profLevel === 2 ? "bg-amber-500 text-black" : sk.profLevel === 1 ? "bg-indigo-600 text-white" : "border-slate-700"
+                        }`}
+                      >
+                        {sk.profLevel === 2 ? "x2" : sk.profLevel === 1 ? "✓" : ""}
+                      </button>
+                      <span>{sk.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-amber-300">{total >= 0 ? `+${total}` : total}</span>
+                      <button onClick={() => setSkills(skills.filter((s) => s.id !== sk.id))} className="text-slate-600 hover:text-red-400">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        {/* Registro en tiempo real */}
-        <div className="bg-slate-950 p-3 rounded border border-slate-800 h-96 flex flex-col">
-          <h2 className="text-sm font-semibold text-slate-400 mb-2">Registro de la Mesa</h2>
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-            {log.map((entry) => {
-              if (entry.private && !isDM && entry.player !== playerName) return null;
-              return (
+        {/* COLUMNA CENTRAL Y DERECHA: ACCIONES Y LOG */}
+        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* ACCIONES */}
+          <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-3">
+            <h2 className="font-semibold text-sm border-b border-slate-800 pb-2">Acciones y Ataques</h2>
+            {actions.map((act) => (
+              <div key={act.id} className="bg-slate-950 p-3 rounded border border-slate-800 flex justify-between items-center">
+                <div>
+                  <div className="font-bold text-sm">{act.name}</div>
+                  <div className="text-xs text-slate-500 font-mono">{act.formula}</div>
+                </div>
+                <button
+                  onClick={() => roll(act)}
+                  className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded flex items-center gap-1 text-xs font-bold"
+                >
+                  <Dices size={14} /> Tirar
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* HISTORIAL / MESA */}
+          <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 h-96 flex flex-col">
+            <h2 className="text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Registro de la Mesa</h2>
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {log.map((entry) => (
                 <div key={entry.id} className="bg-slate-900 p-2 rounded text-xs border-l-2 border-indigo-500">
-                  <div className="flex justify-between text-slate-400 mb-1">
+                  <div className="flex justify-between text-slate-500 text-[10px] mb-1">
                     <span className="font-bold text-indigo-300">{entry.player}</span>
                     <span>{new Date(entry.ts).toLocaleTimeString()}</span>
                   </div>
-                  <div className="font-semibold text-sm mb-1">{entry.actionName}: <span className="text-amber-400 text-base">{entry.total}</span></div>
-                  <div className="text-slate-500 font-mono text-[10px]">{entry.trace?.join(" | ")}</div>
+                  <div className="font-semibold text-xs">{entry.actionName}: <span className="text-amber-400 text-sm font-bold">{entry.total}</span></div>
+                  <div className="text-slate-500 font-mono text-[10px] mt-0.5">{entry.trace?.join(" | ")}</div>
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
         </div>
       </div>
